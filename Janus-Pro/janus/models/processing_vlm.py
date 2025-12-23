@@ -60,7 +60,7 @@ class BatchedVLChatProcessorOutput(DictOutput):
     images_seq_mask: torch.BoolTensor
     images_emb_mask: torch.BoolTensor
 
-    def to(self, device, dtype=torch.bfloat16):
+    def to(self, device, dtype=torch.float16):
         self.input_ids = self.input_ids.to(device)
         self.attention_mask = self.attention_mask.to(device)
         self.images_seq_mask = self.images_seq_mask.to(device)
