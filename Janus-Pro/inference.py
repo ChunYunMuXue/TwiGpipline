@@ -42,6 +42,8 @@ conversation = [
     {"role": "Assistant", "content": ""},
 ]
 
+print(conversation)
+
 # load images and prepare for inputs
 pil_images = load_pil_images(conversation)
 prepare_inputs = vl_chat_processor(
