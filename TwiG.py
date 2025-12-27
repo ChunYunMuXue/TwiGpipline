@@ -6,6 +6,7 @@ import logging
 from transformers import AutoModelForCausalLM
 from janus.models import MultiModalityCausalLM, VLChatProcessor
 from janus.utils.io import load_pil_images
+from models.latent_control.controller import LatentController, LatentControllerConfig
 
 logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
 
@@ -33,6 +34,16 @@ img_size = 384
 patch_size = 16
 channels = 8
 os.makedirs("generated_samples", exist_ok=True)
+
+# -----------------------------
+# Latent control（跑题检测 -> think -> 安全注入）
+# -----------------------------
+enable_latent_control = True
+latent_cfg = LatentControllerConfig(
+    enabled=enable_latent_control,
+    img_hidden_window=32,
+    max_triggers_per_image=3,
+)
 
 # =============================
 # 多阶段生成函数（先询问再生成）
@@ -130,6 +141,15 @@ def generate_multi_stage_with_image_feedback(
             if i % 2 != 0:
                 tokens_emb[i, 1:-1] = processor.pad_id
         prompt_embeds = model.language_model.get_input_embeddings()(tokens_emb)
+        # prompt pooled vector（仅用 conditional 分支）
+        prompt_vec = prompt_embeds[0::2].mean(dim=1)  # [B, D]
+
+        # controller：每个 stage 复位一次 state（防止跨 stage 污染）
+        controller = None
+        if enable_latent_control:
+            d_model = prompt_embeds.shape[-1]
+            controller = LatentController(d_model=d_model, tokenizer=tokenizer, cfg=latent_cfg).to(model.device)
+            controller.reset(batch_size=parallel_size, device=model.device)
 
         if prev_stage_tokens is not None:
             prev_embeds = model.prepare_gen_img_embeds(prev_stage_tokens.view(-1))
@@ -142,13 +162,14 @@ def generate_multi_stage_with_image_feedback(
         # 生成 token
         # ----------------------------
         stage_tokens = torch.zeros((parallel_size, per_stage_tokens), dtype=torch.long).cuda()
-        outputs = None
+        past_key_values = None
         for i in range(per_stage_tokens):
             outputs = model.language_model.model(
                 inputs_embeds=inputs_embeds,
                 use_cache=True,
-                past_key_values=outputs.past_key_values if outputs else None,
+                past_key_values=past_key_values,
             )
+            past_key_values = outputs.past_key_values
             h = outputs.last_hidden_state[:, -1, :]
             logits = model.gen_head(h)
             cond, uncond = logits[0::2], logits[1::2]
@@ -156,6 +177,21 @@ def generate_multi_stage_with_image_feedback(
             probs = torch.softmax(logits / temperature, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             stage_tokens[:, i] = next_token.squeeze(-1)
+
+            # Latent control hook（触发时把 control tokens 写入 KV，然后再继续喂 image token）
+            if controller is not None:
+                h_img_last_cond = h[0::2]  # [B,D]
+                past_key_values, did = controller.maybe_inject(
+                    model=model,
+                    past_key_values=past_key_values,
+                    step_idx=i,
+                    prompt_vec=prompt_vec,
+                    h_img_last_cond=h_img_last_cond,
+                    next_token_probs=probs,
+                    prompt_text_for_think=stage_text,
+                )
+                if did:
+                    print(f"[LatentControl] injected at stage={stage_idx+1}, step={i+1}")
 
             next_token_exp = torch.cat([next_token.unsqueeze(1), next_token.unsqueeze(1)], dim=1).view(-1)
             img_embeds = model.prepare_gen_img_embeds(next_token_exp)

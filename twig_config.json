@@ -1,0 +1,44 @@
+{
+  "model_path": "deepseek-ai/Janus-Pro-7B",
+  "base_prompt": "A cozy wooden cabin beside a calm lake at sunrise, snow-covered pines and mountains glowing warmly",
+  "positions": ["top part", "middle part", "bottom part", "null"],
+  "parallel_size": 1,
+  "stages": 3,
+  "image_token_num": 576,
+  "img_size": 384,
+  "patch_size": 16,
+  "channels": 8,
+  "generation": {
+    "cfg_weight": 5.0,
+    "temperature": 1.0
+  },
+  "latent_control": {
+    "enabled": true,
+    "img_hidden_window": 32,
+    "max_triggers_per_image": 3,
+    "think_prompt_max_tokens": 96,
+    "trigger": {
+      "check_every": 32,
+      "window": 8,
+      "tau_drop": 0.05,
+      "tau_var": 0.002,
+      "tau_entropy": 3.5,
+      "tau_sim": 0.25
+    },
+    "condenser": {
+      "memory_tokens": 8,
+      "num_heads": 8,
+      "mlp_ratio": 2.0
+    },
+    "translator": {
+      "hidden_ratio": 2.0,
+      "max_scale": 1.0
+    },
+    "shaper": {
+      "control_tokens": 4,
+      "hidden_ratio": 2.0
+    }
+  }
+}
+
+
