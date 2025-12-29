@@ -26,13 +26,14 @@ vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 # 基础配置
 # -----------------------------
 base_prompt = "A cozy wooden cabin beside a calm lake at sunrise, snow-covered pines and mountains glowing warmly"
+# base_prompt = "Capture a close-up shot of a vibrant sunflower in full bloom, with a honeybee perched on its petals, its delicate wings catching the sunlight."
 positions = ["top part", "middle part", "bottom part", "null"]  # null 最后一阶段占位
-parallel_size = 1
-stages = 3
-image_token_num = 576
-img_size = 384
-patch_size = 16
-channels = 8
+parallel_size = 1 # gen_number      
+stages = 3 # stage_number
+image_token_num = 576 # image_token_number
+img_size = 384 # image_size
+patch_size = 16 # patch_size
+channels = 8 # channels
 os.makedirs("generated_samples", exist_ok=True)
 
 # -----------------------------
@@ -67,7 +68,7 @@ def generate_multi_stage_with_image_feedback(
     all_tokens = []
 
     for stage_idx, pos in enumerate(positions):
-        if stage_idx == 3:  # skip null
+        if pos == "null":  # skip null
             break
 
         print(f"\n[Stage {stage_idx+1}/{stages}] Processing '{pos}'")
@@ -134,6 +135,8 @@ def generate_multi_stage_with_image_feedback(
         )
         prompt = sft_format + processor.image_start_tag
 
+        # import pdb; pdb.set_trace()
+
         input_ids = torch.LongTensor(tokenizer.encode(prompt)).cuda()
         tokens_emb = torch.zeros((parallel_size*2, len(input_ids)), dtype=torch.long).cuda()
         for i in range(parallel_size*2):
@@ -158,6 +161,7 @@ def generate_multi_stage_with_image_feedback(
         else:
             inputs_embeds = prompt_embeds
 
+        # import pdb; pdb.set_trace()
         # ----------------------------
         # 生成 token
         # ----------------------------
@@ -177,6 +181,8 @@ def generate_multi_stage_with_image_feedback(
             probs = torch.softmax(logits / temperature, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             stage_tokens[:, i] = next_token.squeeze(-1)
+
+            # import pdb; pdb.set_trace()
 
             # Latent control hook（触发时把 control tokens 写入 KV，然后再继续喂 image token）
             if controller is not None:

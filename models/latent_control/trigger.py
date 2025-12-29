@@ -27,6 +27,7 @@ def cosine_sim(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-8) -> torch.Ten
 
 def entropy_from_probs(probs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     p = probs.clamp_min(eps)
+    print("entropy_from_probs : ",p)
     return -(p * p.log()).sum(dim=-1)
 
 

@@ -86,8 +86,8 @@ class LatentController(nn.Module):
         m_tokens: torch.Tensor,  # [B, M, D]
     ) -> torch.Tensor:
         """
-        使用 language model 做一次短 forward，拿 pooled hidden 作为 z_vec。
-        不输出可读 CoT，只保留 hidden。
+        使用 language model 做一次短 forward,拿 pooled hidden 作为 z_vec。
+        不输出可读 CoT,只保留 hidden。
         """
         # tokenize prompt summary
         ids = self.tokenizer.encode(prompt_text)
@@ -98,7 +98,7 @@ class LatentController(nn.Module):
         text_emb = model.language_model.get_input_embeddings()(input_ids).expand(
             m_tokens.shape[0], -1, -1
         )
-        inputs_embeds = torch.cat([text_emb, m_tokens], dim=1)  # [B, T+M, D]
+        inputs_embeds = torch.cat([text_emb, m_tokens], dim=1).to(torch.float16)  # [B, T+M, D]
         out = model.language_model.model(inputs_embeds=inputs_embeds, use_cache=False)
         h = out.last_hidden_state  # [B, T+M, D]
         z_vec = h.mean(dim=1)
@@ -136,26 +136,38 @@ class LatentController(nn.Module):
         if (step_idx + 1) % self.cfg.trigger.check_every != 0:
             return past_key_values, False
 
+        # import pdb; pdb.set_trace()
+
         # Condenser
         m_tokens, m_vec = self.condenser(img_seq)
+
+        # import pdb; pdb.set_trace()
 
         # Trigger features
         s_t = cosine_sim(m_vec, prompt_vec)  # [B]
         u_t = entropy_from_probs(next_token_probs)  # [B]
         delta_s, var_s = self._trigger_state.update(s_t)
+        print(s_t,u_t,delta_s,var_s)
         trig = should_trigger(self.cfg.trigger, s_t=s_t, delta_s=delta_s, var_s=var_s, u_t=u_t)
 
-        if not bool(trig.any()):
-            return past_key_values, False
+        # import pdb; pdb.set_trace()
+
+        # if not bool(trig.any()):
+        #     return past_key_values, False
+
+        # import pdb; pdb.set_trace()
 
         # Think -> Translator -> Shaper
         z_vec = self._think_latent(model=model, prompt_text=prompt_text_for_think, m_tokens=m_tokens)
         c_vec = self.translator(z_vec=z_vec, m_vec=m_vec, p_vec=prompt_vec)  # [B,D]
         ctrl_tokens = self.shaper.make_control_tokens_for_cfg(c_vec)  # [2B,K,D]
 
+
+        # import pdb; pdb.set_trace()
+
         # Prefix injection: 额外 forward 一次，把 control tokens 写进 KV
         inj_out = model.language_model.model(
-            inputs_embeds=ctrl_tokens,
+            inputs_embeds=ctrl_tokens.to(torch.float16),
             use_cache=True,
             past_key_values=past_key_values,
         )
