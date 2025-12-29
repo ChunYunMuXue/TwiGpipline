@@ -10,6 +10,7 @@ from models.latent_control.controller import (
     LatentControllerConfig as _LatentControllerConfig,
 )
 from models.latent_control.condenser import CondenserConfig
+from models.latent_control.long_condenser import LongCondenserConfig
 from models.latent_control.trigger import TriggerConfig
 from models.latent_control.translator import TranslatorConfig
 from models.latent_control.shaper import ShaperConfig
@@ -37,7 +38,7 @@ def build_latent_controller_config(data: Dict[str, Any]) -> LatentControllerConf
     lc = data.get("latent_control", {}) if "latent_control" in data else data
 
     cfg = LatentControllerConfig()
-    for k in ("enabled", "img_hidden_window", "max_triggers_per_image", "think_prompt_max_tokens"):
+    for k in ("enabled", "img_hidden_window", "max_triggers_per_image", "think_prompt_max_tokens", "condenser_mode"):
         if k in lc:
             setattr(cfg, k, lc[k])
 
@@ -45,6 +46,10 @@ def build_latent_controller_config(data: Dict[str, Any]) -> LatentControllerConf
         cfg.trigger = TriggerConfig(**lc["trigger"])
     if "condenser" in lc:
         cfg.condenser = CondenserConfig(**lc["condenser"])
+    if "long_condenser" in lc:
+        # 不改动 controller.py 的前提下，把 long condenser 配置解析出来挂到 cfg 上，
+        # 后续你在 controller 里启用时可直接取 cfg.long_condenser
+        cfg.long_condenser = LongCondenserConfig(**lc["long_condenser"])
     if "translator" in lc:
         cfg.translator = TranslatorConfig(**lc["translator"])
     if "shaper" in lc:

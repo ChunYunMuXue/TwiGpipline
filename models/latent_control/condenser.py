@@ -47,6 +47,7 @@ class AttentionCondenser(nn.Module):
         )
 
     def forward(self, h_img_seq: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # print("h_img_seq_shape : ",h_img_seq.shape)
         if h_img_seq.dim() != 3:
             raise ValueError(f"h_img_seq must be [B,S,D], got {tuple(h_img_seq.shape)}")
         b, _, d = h_img_seq.shape

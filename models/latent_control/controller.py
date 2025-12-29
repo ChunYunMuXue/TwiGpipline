@@ -10,6 +10,7 @@ from .condenser import AttentionCondenser, CondenserConfig
 from .trigger import TriggerConfig, TriggerState, cosine_sim, entropy_from_probs, should_trigger
 from .translator import Translator, TranslatorConfig
 from .shaper import ControlTokenShaper, ShaperConfig
+from .long_condenser import LongAttentionCondenser, LongCondenserConfig
 
 
 @dataclass
@@ -25,6 +26,7 @@ class LatentControllerConfig:
 
     # condenser/translator/shaper configs
     condenser: CondenserConfig = field(default_factory=CondenserConfig)
+    long_condenser: LongCondenserConfig = field(default_factory=LongCondenserConfig)
     translator: TranslatorConfig = field(default_factory=TranslatorConfig)
     shaper: ShaperConfig = field(default_factory=ShaperConfig)
 
@@ -45,6 +47,7 @@ class LatentController(nn.Module):
         self.d_model = d_model
 
         self.condenser = AttentionCondenser(d_model, cfg.condenser)
+        self.long_condenser = LongAttentionCondenser(d_model, cfg.long_condenser)
         self.translator = Translator(d_model, cfg.translator)
         self.shaper = ControlTokenShaper(d_model, cfg.shaper)
 
@@ -77,6 +80,32 @@ class LatentController(nn.Module):
         idx = (idx + self._img_h_ptr) % w
         seq = self._img_h_buf[:, idx]
         return seq
+
+    def _push_img_long_hidden(self, h_img_last: torch.Tensor) -> torch.Tensor:
+        
+        if h_img_last.dim() != 2:
+            raise ValueError(f"h_img_last must be [B,D], got {tuple(h_img_last.shape)}")
+
+        # lazy init / safety re-init (batch size/device 变化时重置历史)
+        lst = getattr(self, "_img_h_long_list", None)
+        if lst is None:
+            self._img_h_long_list = []
+            self._img_h_long_b = int(h_img_last.shape[0])
+            self._img_h_long_d = int(h_img_last.shape[1])
+            self._img_h_long_device = h_img_last.device
+        else:
+            if (
+                int(h_img_last.shape[0]) != getattr(self, "_img_h_long_b", int(h_img_last.shape[0]))
+                or int(h_img_last.shape[1]) != getattr(self, "_img_h_long_d", int(h_img_last.shape[1]))
+                or h_img_last.device != getattr(self, "_img_h_long_device", h_img_last.device)
+            ):
+                self._img_h_long_list = []
+                self._img_h_long_b = int(h_img_last.shape[0])
+                self._img_h_long_d = int(h_img_last.shape[1])
+                self._img_h_long_device = h_img_last.device
+
+        self._img_h_long_list.append(h_img_last.unsqueeze(1))  # [B,1,D]
+        return torch.cat(self._img_h_long_list, dim=1)
 
     @torch.inference_mode()
     def _think_latent(
@@ -129,37 +158,43 @@ class LatentController(nn.Module):
             self.reset(batch_size=h_img_last_cond.shape[0], device=h_img_last_cond.device)
 
         img_seq = self._push_img_hidden(h_img_last_cond)  # [B,W,D]
+        long_img = self._push_img_long_hidden(h_img_last_cond)
 
         # 预算 & 频率控制
         if self._triggers_used >= self.cfg.max_triggers_per_image:
             return past_key_values, False
         if (step_idx + 1) % self.cfg.trigger.check_every != 0:
             return past_key_values, False
+        # print("pass mod : ",step_idx)
+        # print("h len : ",h_img_last_cond.shape)
 
         # import pdb; pdb.set_trace()
 
         # Condenser
         m_tokens, m_vec = self.condenser(img_seq)
-
+        
         # import pdb; pdb.set_trace()
 
         # Trigger features
         s_t = cosine_sim(m_vec, prompt_vec)  # [B]
         u_t = entropy_from_probs(next_token_probs)  # [B]
         delta_s, var_s = self._trigger_state.update(s_t)
-        print(s_t,u_t,delta_s,var_s)
+        # print(s_t,u_t,delta_s,var_s)
         trig = should_trigger(self.cfg.trigger, s_t=s_t, delta_s=delta_s, var_s=var_s, u_t=u_t)
 
         # import pdb; pdb.set_trace()
 
-        # if not bool(trig.any()):
-        #     return past_key_values, False
+        if not bool(trig.any()):
+            return past_key_values, False
 
-        # import pdb; pdb.set_trace()
+        # BEGINING THINKING ---------
+        # LONG CONDENSER
+        # print("LONG ",long_img.shape)
+        long_m_tokens, long_m_vec = self.long_condenser(img_seq)
 
         # Think -> Translator -> Shaper
-        z_vec = self._think_latent(model=model, prompt_text=prompt_text_for_think, m_tokens=m_tokens)
-        c_vec = self.translator(z_vec=z_vec, m_vec=m_vec, p_vec=prompt_vec)  # [B,D]
+        z_vec = self._think_latent(model=model, prompt_text=prompt_text_for_think, m_tokens=long_m_tokens)
+        c_vec = self.translator(z_vec=z_vec, m_vec=long_m_vec, p_vec=prompt_vec)  # [B,D]
         ctrl_tokens = self.shaper.make_control_tokens_for_cfg(c_vec)  # [2B,K,D]
 
 

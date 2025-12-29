@@ -26,9 +26,48 @@ def cosine_sim(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-8) -> torch.Ten
 
 
 def entropy_from_probs(probs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    p = probs.clamp_min(eps)
-    print("entropy_from_probs : ",p)
-    return -(p * p.log()).sum(dim=-1)
+    # p = probs.clamp_min(eps)
+    # print("entropy_from_probs : ",p)
+    # return -(p * p.log()).sum(dim=-1)
+    if torch.isnan(probs).any():
+        print(f"WARNING: probs contains NaN! probs shape: {probs.shape}, probs stats: min={probs.min()}, max={probs.max()}, mean={probs.mean()}")
+        probs = torch.nan_to_num(probs, nan=eps)
+    
+    if torch.isinf(probs).any():
+        print(f"WARNING: probs contains Inf! probs shape: {probs.shape}")
+        probs = torch.clamp(probs, min=eps, max=1.0)
+    
+    # 为不同 dtype 选择足够大的 eps（尤其是 fp16：1e-8 会下溢成 0，导致 log(0)=-inf）
+    finfo = torch.finfo(probs.dtype) if probs.is_floating_point() else torch.finfo(torch.float32)
+    eps_eff = float(max(eps, finfo.tiny))
+
+    # 熵计算最好用 float32 做数值更稳
+    p = probs.to(torch.float32)
+
+    # 确保概率在有效范围内（先裁到 [0,1]，后续再做归一化）
+    p = p.clamp_min(0.0).clamp_max(1.0)
+    
+    # 检查是否归一化（允许小的误差）
+    probs_sum = p.sum(dim=-1)
+    if not torch.allclose(probs_sum, torch.ones_like(probs_sum), atol=1e-3):
+        print(f"WARNING: probs not normalized! sum range: [{probs_sum.min()}, {probs_sum.max()}]")
+        # 重新归一化
+        p = p / (p.sum(dim=-1, keepdim=True) + eps_eff)
+    
+    # 计算熵：避免 0 * (-inf) -> NaN
+    # torch.special.entr(x) = -x*log(x)，并且在 x=0 时返回 0（更稳定）
+    if hasattr(torch.special, "entr"):
+        entropy = torch.special.entr(p).sum(dim=-1)
+    else:
+        p_pos = p > 0
+        entropy = -torch.where(p_pos, p * torch.log(p.clamp_min(eps_eff)), torch.zeros_like(p)).sum(dim=-1)
+    
+    # 检查结果
+    if torch.isnan(entropy).any() or torch.isinf(entropy).any():
+        print(f"ERROR: entropy contains NaN/Inf! entropy: {entropy}, p stats: min={p.min()}, max={p.max()}")
+        entropy = torch.nan_to_num(entropy, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    return entropy
 
 
 class TriggerState:

@@ -15,8 +15,8 @@
   "latent_control": {
     "enabled": true,
     "img_hidden_window": 32,
-    "max_triggers_per_image": 3,
-    "think_prompt_max_tokens": 96,
+    "max_triggers_per_image": 10,
+    "think_prompt_max_tokens": 200,
     "trigger": {
       "check_every": 32,
       "window": 8,
@@ -29,6 +29,13 @@
       "memory_tokens": 8,
       "num_heads": 8,
       "mlp_ratio": 2.0
+    },
+    "long_condenser": {
+      "memory_tokens": 8,
+      "num_heads": 8,
+      "mlp_ratio": 2.0,
+      "chunk_size": 256,
+      "use_fp32_accum": true
     },
     "translator": {
       "hidden_ratio": 2.0,

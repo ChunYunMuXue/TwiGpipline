@@ -7,13 +7,21 @@ from transformers import AutoModelForCausalLM
 from janus.models import MultiModalityCausalLM, VLChatProcessor
 from janus.utils.io import load_pil_images
 from models.latent_control.controller import LatentController, LatentControllerConfig
+from config_io import build_latent_controller_config, load_json_config, resolve_config_path
 
 logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
 
 # -----------------------------
+# 配置加载（从 twig_config.json 读入，避免硬编码不生效）
+# -----------------------------
+_default_cfg_path = os.path.join(os.path.dirname(__file__), "twig_config.json")
+_cfg_path = resolve_config_path(_default_cfg_path)
+_cfg = load_json_config(_cfg_path)
+
+# -----------------------------
 # 模型与处理器加载
 # -----------------------------
-model_path = "deepseek-ai/Janus-Pro-7B"
+model_path = _cfg.get("model_path", "deepseek-ai/Janus-Pro-7B")
 vl_chat_processor: VLChatProcessor = VLChatProcessor.from_pretrained(model_path)
 tokenizer = vl_chat_processor.tokenizer
 
@@ -25,26 +33,29 @@ vl_gpt = vl_gpt.to(torch.float16).cuda().eval()
 # -----------------------------
 # 基础配置
 # -----------------------------
-base_prompt = "A cozy wooden cabin beside a calm lake at sunrise, snow-covered pines and mountains glowing warmly"
+# base_prompt = "A cozy wooden cabin beside a calm lake at sunrise, snow-covered pines and mountains glowing warmly"
 # base_prompt = "Capture a close-up shot of a vibrant sunflower in full bloom, with a honeybee perched on its petals, its delicate wings catching the sunlight."
-positions = ["top part", "middle part", "bottom part", "null"]  # null 最后一阶段占位
-parallel_size = 1 # gen_number      
-stages = 3 # stage_number
-image_token_num = 576 # image_token_number
-img_size = 384 # image_size
-patch_size = 16 # patch_size
-channels = 8 # channels
+base_prompt = _cfg.get(
+    "base_prompt",
+    "A cozy wooden cabin beside a calm lake at sunrise, snow-covered pines and mountains glowing warmly",
+)
+positions = _cfg.get("positions", ["top part", "middle part", "bottom part", "null"])  # null 最后一阶段占位
+parallel_size = int(_cfg.get("parallel_size", 1))  # gen_number
+stages = int(_cfg.get("stages", 3))  # stage_number
+image_token_num = int(_cfg.get("image_token_num", 576))  # image_token_number
+img_size = int(_cfg.get("img_size", 384))  # image_size
+patch_size = int(_cfg.get("patch_size", 16))  # patch_size
+channels = int(_cfg.get("channels", 8))  # channels
+generation_cfg = _cfg.get("generation", {}) if isinstance(_cfg.get("generation", {}), dict) else {}
+cfg_weight = float(generation_cfg.get("cfg_weight", 5.0))
+temperature = float(generation_cfg.get("temperature", 1.0))
 os.makedirs("generated_samples", exist_ok=True)
 
 # -----------------------------
 # Latent control（跑题检测 -> think -> 安全注入）
 # -----------------------------
-enable_latent_control = True
-latent_cfg = LatentControllerConfig(
-    enabled=enable_latent_control,
-    img_hidden_window=32,
-    max_triggers_per_image=3,
-)
+latent_cfg = build_latent_controller_config(_cfg)
+enable_latent_control = bool(latent_cfg.enabled)
 
 # =============================
 # 多阶段生成函数（先询问再生成）
@@ -62,9 +73,11 @@ def generate_multi_stage_with_image_feedback(
     temperature: float = 1.0,
     img_size: int = 384,
     patch_size: int = 16,
+    channels: int = 8,
 ):
     prev_stage_tokens = None
     per_stage_tokens = image_token_num // stages
+    print("Per stage gen ",per_stage_tokens,"tokens");
     all_tokens = []
 
     for stage_idx, pos in enumerate(positions):
@@ -96,7 +109,7 @@ def generate_multi_stage_with_image_feedback(
             conversation[0]["images"] = stage_image_paths
         conversation.append({"role": "Assistant", "content": ""})
 
-        print(f"[Stage {stage_idx + 1} prompt]:",conversation)
+        # print(f"[Stage {stage_idx + 1} prompt]:",conversation)
 
         if stage_image_paths:
             pil_images = load_pil_images(conversation)
@@ -118,7 +131,7 @@ def generate_multi_stage_with_image_feedback(
             do_sample=True
         )
         understanding_text = tokenizer.decode(outputs_text[0].cpu().tolist(), skip_special_tokens=True)
-        print(f"[Stage {stage_idx+1} understanding]: {understanding_text}\n")
+        # print(f"[Stage {stage_idx+1} understanding]: {understanding_text}\n")
 
         # ----------------------------
         # 构造本阶段生成 prompt
@@ -168,6 +181,7 @@ def generate_multi_stage_with_image_feedback(
         stage_tokens = torch.zeros((parallel_size, per_stage_tokens), dtype=torch.long).cuda()
         past_key_values = None
         for i in range(per_stage_tokens):
+            # print("gen ",i)
             outputs = model.language_model.model(
                 inputs_embeds=inputs_embeds,
                 use_cache=True,
@@ -230,7 +244,12 @@ generate_multi_stage_with_image_feedback(
     vl_chat_processor,
     base_prompt,
     positions,
-    parallel_size=1,
-    stages=3,
-    image_token_num=576,
+    parallel_size=parallel_size,
+    stages=stages,
+    image_token_num=image_token_num,
+    cfg_weight=cfg_weight,
+    temperature=temperature,
+    img_size=img_size,
+    patch_size=patch_size,
+    channels=channels,
 )
