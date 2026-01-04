@@ -46,10 +46,11 @@ class LatentController(nn.Module):
         self.tokenizer = tokenizer
         self.d_model = d_model
 
-        self.condenser = AttentionCondenser(d_model, cfg.condenser)
-        self.long_condenser = LongAttentionCondenser(d_model, cfg.long_condenser)
-        self.translator = Translator(d_model, cfg.translator)
-        self.shaper = ControlTokenShaper(d_model, cfg.shaper)
+        # 统一将子模块权重放到 fp16（与你的整体推理 dtype 对齐）
+        self.condenser = AttentionCondenser(d_model, cfg.condenser).to(dtype=torch.float16)
+        self.long_condenser = LongAttentionCondenser(d_model, cfg.long_condenser).to(dtype=torch.float16)
+        self.translator = Translator(d_model, cfg.translator).to(dtype=torch.float16)
+        self.shaper = ControlTokenShaper(d_model, cfg.shaper).to(dtype=torch.float16)
 
         # 运行态 state（每张图/每个 stage reset）
         self._trigger_state: Optional[TriggerState] = None
@@ -59,7 +60,7 @@ class LatentController(nn.Module):
 
     def reset(self, batch_size: int, device: torch.device):
         w = int(self.cfg.img_hidden_window)
-        self._img_h_buf = torch.zeros((batch_size, w, self.d_model), device=device)
+        self._img_h_buf = torch.zeros((batch_size, w, self.d_model), device=device, dtype=torch.float16)
         self._img_h_ptr = 0
         self._trigger_state = TriggerState(batch_size, self.cfg.trigger.window, device=device)
         self._triggers_used = 0
@@ -71,7 +72,7 @@ class LatentController(nn.Module):
         """
         assert self._img_h_buf is not None
         b, w, d = self._img_h_buf.shape
-        self._img_h_buf[:, self._img_h_ptr] = h_img_last
+        self._img_h_buf[:, self._img_h_ptr] = h_img_last.to(dtype=torch.float16)
         self._img_h_ptr = (self._img_h_ptr + 1) % w
 
         # 以时间顺序展开 buffer（最近的在最后）
@@ -104,10 +105,9 @@ class LatentController(nn.Module):
                 self._img_h_long_d = int(h_img_last.shape[1])
                 self._img_h_long_device = h_img_last.device
 
-        self._img_h_long_list.append(h_img_last.unsqueeze(1))  # [B,1,D]
+        self._img_h_long_list.append(h_img_last.to(dtype=torch.float16).unsqueeze(1))  # [B,1,D]
         return torch.cat(self._img_h_long_list, dim=1)
 
-    @torch.inference_mode()
     def _think_latent(
         self,
         model,  # MultiModalityCausalLM
@@ -133,7 +133,6 @@ class LatentController(nn.Module):
         z_vec = h.mean(dim=1)
         return z_vec
 
-    @torch.inference_mode()
     def maybe_inject(
         self,
         model,  # MultiModalityCausalLM
@@ -184,16 +183,24 @@ class LatentController(nn.Module):
 
         # import pdb; pdb.set_trace()
 
-        if not bool(trig.any()):
-            return past_key_values, False
+        # if not bool(trig.any()):
+        #     return past_key_values, False
+        # train time : trigger always True
 
         # BEGINING THINKING ---------
         # LONG CONDENSER
         # print("LONG ",long_img.shape)
-        long_m_tokens, long_m_vec = self.long_condenser(img_seq)
+        long_m_tokens, long_m_vec = self.long_condenser(long_img)
 
         # Think -> Translator -> Shaper
-        z_vec = self._think_latent(model=model, prompt_text=prompt_text_for_think, m_tokens=long_m_tokens)
+        # 训练时：Janus-Pro 通常冻结，我们不需要沿着 LM 的 think 路径反传到 m_tokens；
+        # 否则会让显存暴涨（需要保存一整段 LLM activations 用于输入梯度）。
+        with torch.no_grad():
+            z_vec = self._think_latent(
+                model=model,
+                prompt_text=prompt_text_for_think,
+                m_tokens=long_m_tokens.detach(),
+            )
         c_vec = self.translator(z_vec=z_vec, m_vec=long_m_vec, p_vec=prompt_vec)  # [B,D]
         ctrl_tokens = self.shaper.make_control_tokens_for_cfg(c_vec)  # [2B,K,D]
 

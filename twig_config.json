@@ -1,7 +1,7 @@
 {
   "model_path": "deepseek-ai/Janus-Pro-7B",
   "base_prompt": "A cozy wooden cabin beside a calm lake at sunrise, snow-covered pines and mountains glowing warmly",
-  "positions": ["top part", "middle part", "bottom part", "null"],
+  "part_template": "{i}-part",
   "parallel_size": 1,
   "stages": 3,
   "image_token_num": 576,
@@ -11,6 +11,11 @@
   "generation": {
     "cfg_weight": 5.0,
     "temperature": 1.0
+  },
+  "stage_prompt": {
+    "use_understanding": true,
+    "understanding_max_tokens": 128,
+    "template": "{base_prompt}. Stage {stage}/{stages} focus: {pos}. Guidance: {guidance}"
   },
   "latent_control": {
     "enabled": true,

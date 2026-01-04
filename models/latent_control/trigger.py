@@ -87,8 +87,9 @@ class TriggerState:
           - delta: Δs_t [B] (和上一个有效值比较；如果不存在则 0)
           - var:   Var(s_{t-w:t}) [B] (忽略 NaN)
         """
+        s_t.to(torch.float16)
         prev_idx = (self.ptr - 1) % self.window
-        prev = self.s_hist[:, prev_idx]
+        prev = self.s_hist[:, prev_idx].to(torch.float16)
         prev_valid = torch.isfinite(prev)
         delta = torch.zeros_like(s_t)
         delta[prev_valid] = s_t[prev_valid] - prev[prev_valid]
