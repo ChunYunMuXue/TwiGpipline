@@ -64,6 +64,12 @@ class LatentController(nn.Module):
         self._img_h_ptr = 0
         self._trigger_state = TriggerState(batch_size, self.cfg.trigger.window, device=device)
         self._triggers_used = 0
+        # 重要：长序列缓存必须随每张图/每个 batch reset，否则会把上一轮计算图带进来，
+        # 触发 “Trying to backward through the graph a second time”.
+        self._img_h_long_list = []
+        self._img_h_long_b = int(batch_size)
+        self._img_h_long_d = int(self.d_model)
+        self._img_h_long_device = device
 
     def _push_img_hidden(self, h_img_last: torch.Tensor) -> torch.Tensor:
         """
@@ -72,7 +78,8 @@ class LatentController(nn.Module):
         """
         assert self._img_h_buf is not None
         b, w, d = self._img_h_buf.shape
-        self._img_h_buf[:, self._img_h_ptr] = h_img_last.to(dtype=torch.float16)
+        # 训练时 LM 冻结：不需要把 h_img_last 的图跨步/跨 batch 保留下来，detach 以免图被意外复用并省显存
+        self._img_h_buf[:, self._img_h_ptr] = h_img_last.detach().to(dtype=torch.float16)
         self._img_h_ptr = (self._img_h_ptr + 1) % w
 
         # 以时间顺序展开 buffer（最近的在最后）
@@ -100,12 +107,14 @@ class LatentController(nn.Module):
                 or int(h_img_last.shape[1]) != getattr(self, "_img_h_long_d", int(h_img_last.shape[1]))
                 or h_img_last.device != getattr(self, "_img_h_long_device", h_img_last.device)
             ):
+                # batch size/device 变化时重置历史
                 self._img_h_long_list = []
                 self._img_h_long_b = int(h_img_last.shape[0])
                 self._img_h_long_d = int(h_img_last.shape[1])
                 self._img_h_long_device = h_img_last.device
 
-        self._img_h_long_list.append(h_img_last.to(dtype=torch.float16).unsqueeze(1))  # [B,1,D]
+        # 同理：长期缓存 detach，避免跨步/跨 batch 把旧计算图拼回来
+        self._img_h_long_list.append(h_img_last.detach().to(dtype=torch.float16).unsqueeze(1))  # [B,1,D]
         return torch.cat(self._img_h_long_list, dim=1)
 
     def _think_latent(

@@ -50,6 +50,35 @@
       "control_tokens": 4,
       "hidden_ratio": 2.0
     }
+  },
+  "train_data": {
+    "root_dir": "/nfs/wenjie/wenjie_0104/data",
+    "sources": [
+      {
+        "subdir": "Aesthetics-Part01",
+        "template": "fluxdb-aesthetics-part01-{idx:05d}-of-00415.parquet",
+        "start": 0,
+        "end": 29
+      },
+      {
+        "subdir": "Aesthetics-Part02",
+        "template": "fluxdb-aesthetics-part02-{idx:05d}-of-00454.parquet",
+        "start": 0,
+        "end": 29
+      },
+      {
+        "subdir": "Imaginative",
+        "template": "fluxdb-imaginative-{idx:05d}-of-00168.parquet",
+        "start": 0,
+        "end": 24
+      },
+      {
+        "subdir": "Text",
+        "template": "fluxdb-text-{idx:05d}-of-00143.parquet",
+        "start": 0,
+        "end": 14
+      }
+    ]
   }
 }
 
